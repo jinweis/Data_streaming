@@ -130,6 +130,8 @@ def generate_fake_trip(trip_id, driver_id):
         mileage=f"{round(mileage)} miles",
         pickup_location=faker_instance.address(),
         destination_location=faker_instance.address()
+        # start_time=str(datetime.now()),
+        # completion_time=str(datetime.now())
     )
 
 def generate_fake_rider(trip_id, rider_id):
@@ -187,6 +189,7 @@ load_dotenv(verbose=True)
 
 
 
+
 #########################################################
 #                                                       #
 #       YOUR HOMEWORK BEGINS HERE (After Line 190)      #
@@ -202,10 +205,14 @@ def get_kafka_config():
     HINT: Use os.getenv to load environment variables for Kafka configuration.
     """
     return {
-        "bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS"),
-        "schema.registry.url": os.getenv("SCHEMA_REGISTRY_URL"),
+        "bootstrap.servers": os.environ['BOOTSTRAP_SERVERS'],
         # TODO: Add other configurations here (e.g., security settings)
+        'security.protocol': os.environ['SECURITY_PROTOCOL'],
+        'sasl.mechanisms': os.environ['SASL_MECHANISMS'],
+        'sasl.username': os.environ['SASL_USERNAME'],
+        'sasl.password': os.environ['SASL_PASSWORD']
     }
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -214,8 +221,33 @@ async def startup_event():
     HINT: Use AdminClient and NewTopic to create Kafka topics.
     """
     admin_client = AdminClient(get_kafka_config())
-    topics = [NewTopic(topic=os.getenv("TOPIC_NAME"), num_partitions=3, replication_factor=1)]
+    # topics = [NewTopic(topic=os.getenv("TOPIC_NAME"), num_partitions=3, replication_factor=1)]
     # TODO: Create topics (handle potential exceptions)
+    topics_to_create = [
+        NewTopic(
+            os.environ['TOPICS_TRIPS'],
+            num_partitions=int(os.environ['TOPIC_TRIPS_PARTITIONS']),
+            replication_factor=int(os.environ['TOPIC_TRIPS_REPLICAS'])
+        ),
+        NewTopic(
+            os.environ['TOPICS_RIDES'],
+            num_partitions=int(os.environ['TOPIC_RIDES_PARTITIONS']),
+            replication_factor=int(os.environ['TOPIC_RIDES_REPLICAS'])
+        ),
+        NewTopic(
+            os.environ['TOPICS_DRIVERS'],
+            num_partitions=int(os.environ['TOPIC_DRIVERS_PARTITIONS']),
+            replication_factor=int(os.environ['TOPIC_DRIVERS_REPLICAS'])
+        ),
+    ]
+    try:
+        futures = admin_client.create_topics(topics_to_create)
+        for topic, future in futures.items():
+            future.result()
+            logger.info(f'created topic {topic}')
+    except Exception as e:
+        logger.warning(f'An error occurred while creating topics: {e}')
+
 
 # 2. Unique Request ID Generation
 def generate_request_id():
@@ -233,8 +265,12 @@ def make_producer(schema_str: str) -> SerializingProducer:
     Create and return a Kafka producer with Avro serialization.
     HINT: Use AvroSerializer for value_serializer.
     """
-    schema_registry_client = SchemaRegistryClient({"url": os.getenv("SCHEMA_REGISTRY_URL")})
-    value_serializer = AvroSerializer(schema_str, schema_registry_client)
+    schema_registry_client = SchemaRegistryClient({"url": os.getenv("SCHEMA_REGISTRY_URL"),
+                                                    'basic.auth.user.info': os.environ['basic_auth.user_info']
+                                                })
+    value_serializer = AvroSerializer(schema_str=schema_str, 
+                                      schema_registry_client=schema_registry_client,
+                                      to_dict=lambda val, ctx: val.dict(by_alias=True))
     return SerializingProducer({
         **get_kafka_config(),
         "key.serializer": StringSerializer(),
@@ -253,15 +289,160 @@ class ProducerCallback:
             logger.info(f"Record delivered to {msg.topic()}")
 
 # 5. FastAPI Endpoints Implementation
-@app.post("/api/generate-trip")
-async def generate_trip(command: CreateTripCommand):
+@app.post("/api/generate-trips")
+async def generate_trip():
+    producer = make_producer(schema_str=schemas.trip_stream_schema)
+
+    trip_id = generate_unique_trip_id()
+    driver_id = generate_driver_id()
+
+    trip_data = generate_fake_trip(trip_id, driver_id)
+    # print(f'---------------{trip_data}-------------------')
+    producer.produce(
+        topic=os.environ["TOPICS_TRIPS"],
+        key=trip_id,
+        value=trip_data,
+        on_delivery=ProducerCallback()
+    )
+
+    producer.flush()
+    return trip_data
+
+
+# TODO: Implement other endpoints following the same pattern
+@app.post("/api/generate-riders")
+async def generate_trip(command:CreateRiderCommand):
+    producer = make_producer(schema_str=schemas.rider_stream_schema)
+
+    trip_id = generate_unique_trip_id()
+    rider_id = generate_rider_id()
+    rider_data = generate_fake_trip(trip_id, rider_id)
+
+    producer.produce(
+        topic=os.getenv("TOPICS_RIDES"),
+        key=str(rider_id),
+        value=rider_data,
+        on_delivery=ProducerCallback()
+    )
+
+    producer.flush()
+    return rider_data
+
+@app.post("/api/generate-complete-trips")
+async def generate_complete_trip(command:GenerateMultipleTripsCommand):
+    trip_id = generate_unique_trip_id()
+    driver_id = generate_driver_id()
+    rider_id = generate_rider_id()
+    
+    trip_data = generate_fake_trip(trip_id, driver_id)
+    mileage = int(trip_data.mileage.split()[0]) # Extract mileage as integer
+    duration = int(trip_data.duration.split()[0]) # Extract duration as integer
+
+    driver_earning_data = generate_fake_driver_earning(trip_id, driver_id, mileage, duration)
+
+    rider_data = generate_fake_rider(trip_id, rider_id)
+    
+    # Producer logic for each stream
+    trip_producer = make_producer(schema_str=schemas.trip_stream_schema)
+    driver_producer = make_producer(schema_str=schemas.driver_earning_stream_schema)
+    rider_producer = make_producer(schema_str=schemas.rider_stream_schema)
+
+    # Producer logic for each stream (send messages)
+    trip_producer.produce(
+        topic=os.getenv("TOPICS_TRIPS"),
+        key=str(trip_id),
+        value=trip_data,
+        on_delivery=ProducerCallback()
+    )
+
+    driver_producer.produce(
+        topic=os.getenv("TOPICS_DRIVERS"),
+        key=str(driver_id),
+        value=driver_earning_data,
+        on_delivery=ProducerCallback()
+    )
+
+    rider_producer.produce(
+        topic=os.getenv("TOPICS_RIDES"),
+        key=str(rider_id),
+        value=rider_data,
+        on_delivery=ProducerCallback()
+    )
+
+    trip_producer.flush()
+    driver_producer.flush()
+    rider_producer.flush()
+
+    return{
+        "trip_id": trip_id,
+        "trip_data": trip_data,
+        "driver_earning_data": driver_earning_data,
+        "rider_data": rider_data
+    }
+
+@app.post("/api/generate-multiple-trips")
+async def generate_trip(command:GenerateMultipleTripsCommand):
     """
     Endpoint to generate a trip.
     HINT: Use the make_producer function to create a producer and send a message to the Kafka topic.
     """
     # TODO: Implement the logic to generate a trip and send it to the Kafka topic
 
-# TODO: Implement other endpoints following the same pattern
+    trip_producer = make_producer(schema_str=schemas.trip_stream_schema)
+    driver_producer = make_producer(schema_str=schemas.driver_earning_stream_schema)
+    rider_producer = make_producer(schema_str=schemas.rider_stream_schema)
+
+    all_trip_data = []driver_earning_data = generate_fake_driver_earning(trip_id, driver_id, mileage, duration)
+
+        rider_data = generate_fake_rider(trip_id, rider_id)
+
+        # Producer logic for each stream (send messages)
+        trip_producer.produce(
+            topic=os.getenv("TOPICS_TRIPS"),
+            key=str(trip_id),
+            value=trip_data,
+            on_delivery=ProducerCallback()
+        )
+
+      
+    for _ in range(command.number_of_trips):
+        trip_id = generate_unique_trip_id()
+        driver_id = generate_driver_id()
+        rider_id = generate_rider_id()
+        
+        trip_data = generate_fake_trip(trip_id, driver_id)
+        mileage = int(trip_data.mileage.split()[0]) # Extract mileage as integer
+        duration = int(trip_data.duration.split()[0]) # Extract duration as integer
+
+          driver_producer.produce(
+            topic=os.getenv("TOPICS_DRIVERS"),
+            key=str(driver_id),
+            value=driver_earning_data,
+            on_delivery=ProducerCallback()
+        )
+
+        rider_producer.produce(
+            topic=os.getenv("TOPICS_RIDES"),
+            key=str(rider_id),
+
+           ≥ 
+            value=rider_data,
+            on_delivery=ProducerCallback()
+        )
+
+        trip_producer.flush()
+        driver_producer.flush()
+        rider_producer.flush()
+
+        all_trip_data.append({
+                "trip_id": trip_id,
+                "trip_data": trip_data,
+                "driver_earning_data": driver_earning_data,
+                "rider_data": rider_data
+            })
+
+    return all_trip_data
+
 
 # [Uncomment the following line when ready to run the server]
 # uvicorn producer:app --reload --port 8001

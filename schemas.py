@@ -4,18 +4,48 @@
 #                                                       #
 #########################################################
 
-# Define the Avro schema for TripStreamModel
 trip_stream_schema = """
 {
   "type": "record",
   "name": "Trip",
   "fields": [
-    # Example field: {"name": "trip_id", "type": "string"}
-    # Add similar fields for driver_id, duration, mileage, pickup_location,
-    # destination_location, start_time (optional), and completion_time (optional)
+    {
+      "name": "trip_id",
+      "type": "string"
+    },
+    {
+      "name": "driver_id",
+      "type": "string"
+    },
+    {
+      "name": "duration",
+      "type": "string"
+    },
+    {
+      "name": "mileage",
+      "type": "string"
+    },
+    {
+      "name": "pickup_location",
+      "type": "string"
+    },
+    {
+      "name": "destination_location",
+      "type": "string"
+    },
+    {
+      "name": "start_time",
+      "type": ["null", "string"],
+      "default": null
+    },
+    {
+      "name": "completion_time",
+      "type": ["null", "string"],
+      "default": null
+    }
   ]
-}
-"""
+}"""
+
 
 # Define the Avro schema for RiderStreamModel
 rider_stream_schema = """
@@ -23,8 +53,34 @@ rider_stream_schema = """
   "type": "record",
   "name": "Rider",
   "fields": [
-    # Add fields for rider_id, trip_id, duration_estimate, initial_fare_estimate,
-    # final_adjusted_fare, payment_status, and rating_to_driver
+    {
+      "name": "rider_id",
+      "type": "string"
+    },
+    {
+      "name": "trip_id",
+      "type": "string"
+    },
+    {
+      "name": "duration_estimate",
+      "type": "string"
+    },
+    {
+      "name": "initial_fare_estimate",
+      "type": "float"
+    },
+    {
+      "name": "final_adjusted_fare",
+      "type": "float"
+    },
+    {
+      "name": "payment_status",
+      "type": "string"
+    },
+    {
+      "name": "rating_to_driver",
+      "type": "int"
+    }
   ]
 }
 """
@@ -36,6 +92,18 @@ driver_earning_stream_schema = """
   "name": "DriverEarning",
   "fields": [
     # Add fields for driver_id, trip_id, and earnings_from_trip
+    {
+      "name": "driver_id",
+      "type": "string"
+    },
+    {
+      "name": "trip_id",
+      "type": "string"
+    },
+    {
+      "name": "earnings_from_trip",
+      "type": "float"
+      }
   ]
 }
 """

@@ -23,8 +23,8 @@ async def make_request(session):
         payload = {"number_of_trips": number_of_trips}
 
         try:
-            # Make the POST request to the new endpoint
-            async with session.post("http://localhost:8001/api/generate-multiple-trips", json=payload) as response:
+            # Make the POST request to the new endpoint , json=payload
+            async with session.post("http://localhost:8001/api/generate-trips", json=payload) as response:
                 if response.status == 200:
                     response_json = await response.json()
                     logging.info("Request successful: %s", response_json)
